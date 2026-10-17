@@ -149,7 +149,10 @@
 
   .input {
     width: 100%;
-    padding: 0.5rem 0.75rem;
+    padding-top: 0.625rem;
+    padding-bottom: 0.625rem;
+    padding-left: 0.875rem;
+    padding-right: 0.875rem;
     background-color: rgb(var(--color-bg));
     border: 1px solid rgb(var(--color-border));
     border-radius: var(--radius);
@@ -157,6 +160,15 @@
     font-size: 0.875rem;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
     outline: none;
+  }
+
+  .input-with-icon {
+    padding-left: 3rem !important;
+  }
+
+  .input-with-both-icons {
+    padding-left: 3rem !important;
+    padding-right: 3rem !important;
   }
 
   .input:focus {

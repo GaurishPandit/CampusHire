@@ -112,13 +112,14 @@ export default function LoginPage() {
             <div>
               <label htmlFor="email" className="label">Email Address</label>
               <div className="relative">
-                <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgb(148 163 184)' }} />
+                <Mail size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'rgb(148 163 184)' }} />
                 <input
                   id="email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="input pl-10"
+                  className="input input-with-icon"
+                  style={{ paddingLeft: '3rem' }}
                   placeholder="you@college.edu.in"
                   required
                   autoComplete="email"
@@ -130,18 +131,19 @@ export default function LoginPage() {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label htmlFor="password" className="label mb-0">Password</label>
-                <Link to="/forgot-password" className="text-xs" style={{ color: 'rgb(96 165 250)' }}>
+                <Link to="/forgot-password" className="text-xs hover:underline" style={{ color: 'rgb(96 165 250)' }}>
                   Forgot password?
                 </Link>
               </div>
               <div className="relative">
-                <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgb(148 163 184)' }} />
+                <Lock size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: 'rgb(148 163 184)' }} />
                 <input
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="input pl-10 pr-10"
+                  className="input input-with-both-icons"
+                  style={{ paddingLeft: '3rem', paddingRight: '3rem' }}
                   placeholder="••••••••"
                   required
                   autoComplete="current-password"
@@ -149,11 +151,12 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 p-1 hover:text-white transition-colors cursor-pointer"
                   style={{ color: 'rgb(148 163 184)' }}
                   tabIndex={-1}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
             </div>

@@ -40,7 +40,6 @@ const CollegeSchema = new mongoose.Schema(
   }
 );
 
-CollegeSchema.index({ slug: 1 });
 CollegeSchema.index({ emailDomains: 1 });
 
 module.exports = mongoose.model('College', CollegeSchema);

@@ -1,7 +1,13 @@
 import axios from 'axios';
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD
+    ? 'https://campushire-ssix.onrender.com/api/v1'
+    : '/api/v1');
+
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: API_BASE_URL,
   withCredentials: true, // send HTTP-only cookies
   headers: {
     'Content-Type': 'application/json',
@@ -35,7 +41,7 @@ api.interceptors.response.use(
     if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
       try {
-        await axios.post('/api/v1/auth/refresh', {}, { withCredentials: true });
+        await axios.post(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true });
         return api(originalRequest);
       } catch (refreshErr) {
         // Refresh failed — only redirect if not already on an auth page
