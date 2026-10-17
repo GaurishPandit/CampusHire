@@ -2,7 +2,7 @@
 
 const { z } = require('zod');
 
-const OPPORTUNITY_TYPES = ['internship', 'full_time', 'placement'];
+const OPPORTUNITY_TYPES = ['internship', 'full_time', 'placement', 'hackathon', 'coding_competition'];
 const WORK_MODES = ['remote', 'hybrid', 'on_site', 'on-site'];
 const APPLICATION_MODES = ['internal', 'external', 'both'];
 const OPPORTUNITY_STATUSES = ['draft', 'published', 'closed', 'completed'];
@@ -25,7 +25,7 @@ const createOpportunitySchema = z.object({
   opportunityType: z
     .enum(OPPORTUNITY_TYPES)
     .optional()
-    .transform((val) => (val === 'placement' ? 'full_time' : val || 'full_time')),
+    .transform((val) => val || 'full_time'),
   type: z.string().optional(),
   workMode: z
     .enum(WORK_MODES)

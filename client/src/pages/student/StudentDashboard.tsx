@@ -14,6 +14,7 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldCheck,
+  IndianRupee,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { dashboardApi, opportunityApi } from '@/api';
@@ -332,8 +333,9 @@ export default function StudentDashboard() {
                           {opp.location || opp.workMode}
                         </span>
                         {opp.ctcOrStipend && (
-                          <span className="text-emerald-400 font-medium">
-                            {opp.ctcOrStipend}
+                          <span className="text-emerald-400 font-medium flex items-center gap-0.5">
+                            <IndianRupee className="w-3.5 h-3.5" />
+                            {opp.ctcOrStipend.replace(/^[₹$]\s*/, '')}
                           </span>
                         )}
                         <span className="flex items-center gap-1 text-slate-500">
@@ -399,17 +401,30 @@ export default function StudentDashboard() {
                         {app.opportunity?.companyName} • {app.appliedAt ? new Date(app.appliedAt).toLocaleDateString() : ((app as any).createdAt ? new Date((app as any).createdAt).toLocaleDateString() : 'Recently')}
                       </p>
                     </div>
-                    <span
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
-                        app.personalStatus === 'selected'
-                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                          : app.personalStatus === 'rejected'
-                          ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                          : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-                      }`}
-                    >
-                      {app.personalStatus || 'Submitted'}
-                    </span>
+                    {(() => {
+                      const st = app.personalStatus || (app as any).status || 'submitted';
+                      return (
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
+                            st === 'selected'
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              : st === 'rejected'
+                              ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                              : st === 'shortlisted'
+                              ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                              : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                          }`}
+                        >
+                          {st === 'selected'
+                            ? 'Selected (Final Offer)'
+                            : st === 'shortlisted'
+                            ? 'Shortlisted (Next Round)'
+                            : st === 'rejected'
+                            ? 'Not Eligible Further'
+                            : st}
+                        </span>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>

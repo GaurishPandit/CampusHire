@@ -71,19 +71,24 @@ async function getDashboardStats(req, res, next) {
       SelectionResult.countDocuments({ ...collegeFilter, isPublished: true }),
     ]);
 
-    // Upcoming deadlines in next 7 days
-    const upcomingDeadlines = await Opportunity.find({
+    // Upcoming deadlines in next 30 days
+    const rawDeadlines = await Opportunity.find({
       ...collegeFilter,
       status: 'published',
       applicationDeadline: {
         $gte: new Date(),
-        $lte: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        $lte: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       },
     })
-      .select('companyName title applicationDeadline')
+      .select('companyName title opportunityType applicationDeadline')
       .sort({ applicationDeadline: 1 })
-      .limit(5)
+      .limit(8)
       .lean();
+
+    const upcomingDeadlines = rawDeadlines.map((d) => ({
+      ...d,
+      deadline: d.applicationDeadline,
+    }));
 
     // Recent activity
     const recentActivity = await AuditLog.find(collegeFilter)

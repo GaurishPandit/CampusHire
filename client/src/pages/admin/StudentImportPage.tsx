@@ -13,6 +13,8 @@ import {
   Users,
   Search,
   GraduationCap,
+  Edit3,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { studentApi } from '@/api';
@@ -32,8 +34,12 @@ interface StudentItem {
   graduationYear: number;
   cgpa: number;
   activeBacklogs: number;
+  phone?: string;
+  tenthPercentage?: number;
+  twelfthPercentage?: number;
   academicDataVerified?: boolean;
   isPlaced?: boolean;
+  placedCompany?: string;
 }
 
 interface PreviewRow {
@@ -80,6 +86,78 @@ export default function StudentImportPage() {
   const [committing, setCommitting] = useState(false);
   const [summary, setSummary] = useState<ValidationSummary | null>(null);
   const [commitResult, setCommitResult] = useState<CommitSummary | null>(null);
+
+  // Edit Student Modal State (Placement Coordinator / Admin Power)
+  const [editingStudent, setEditingStudent] = useState<StudentItem | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    email: '',
+    rollNumber: '',
+    branch: '',
+    graduationYear: 2025,
+    cgpa: 0,
+    activeBacklogs: 0,
+    phone: '',
+    tenthPercentage: '',
+    twelfthPercentage: '',
+    isActive: true,
+    isPlaced: false,
+    placedCompany: '',
+  });
+
+  const handleOpenEdit = (s: StudentItem) => {
+    setEditingStudent(s);
+    const fullName = s.name || `${s.user?.firstName || ''} ${s.user?.lastName || ''}`.trim();
+    setEditForm({
+      name: fullName,
+      email: s.user?.email || '',
+      rollNumber: s.rollNumber || '',
+      branch: s.branch || '',
+      graduationYear: s.graduationYear || 2025,
+      cgpa: s.cgpa ?? 0,
+      activeBacklogs: s.activeBacklogs ?? 0,
+      phone: s.phone || '',
+      tenthPercentage: s.tenthPercentage !== undefined && s.tenthPercentage !== null ? String(s.tenthPercentage) : '',
+      twelfthPercentage: s.twelfthPercentage !== undefined && s.twelfthPercentage !== null ? String(s.twelfthPercentage) : '',
+      isActive: s.user?.isActive !== false,
+      isPlaced: !!s.isPlaced,
+      placedCompany: s.placedCompany || '',
+    });
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+    try {
+      setSavingEdit(true);
+      const payload: any = {
+        name: editForm.name.trim(),
+        email: editForm.email.trim(),
+        rollNumber: editForm.rollNumber.trim().toUpperCase(),
+        branch: editForm.branch.trim(),
+        graduationYear: Number(editForm.graduationYear),
+        cgpa: Number(editForm.cgpa),
+        activeBacklogs: Number(editForm.activeBacklogs),
+        phone: editForm.phone.trim() || undefined,
+        tenthPercentage: editForm.tenthPercentage ? Number(editForm.tenthPercentage) : undefined,
+        twelfthPercentage: editForm.twelfthPercentage ? Number(editForm.twelfthPercentage) : undefined,
+        isActive: editForm.isActive,
+        isPlaced: editForm.isPlaced,
+        placedCompany: editForm.placedCompany?.trim() || undefined,
+      };
+
+      await studentApi.updateStudent(editingStudent._id, payload);
+      toast.success('Student details updated successfully!');
+      setEditingStudent(null);
+      fetchStudentRoster();
+    } catch (err: any) {
+      const msg = err.response?.data?.message || err.message || 'Failed to update student details';
+      toast.error(msg);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const sampleCsvContent = `name,email,rollNumber,branch,graduationYear,cgpa,activeBacklogs
 Aarav Sharma,aarav@college.edu,21CS101,CSE,2025,8.85,0
@@ -142,12 +220,50 @@ Ananya Iyer,ananya@college.edu,21IT104,IT,2025,9.20,0`;
       formData.append('file', file);
 
       const res = await studentApi.uploadCsvPreview(formData);
-      if (res.data?.data) {
-        setSummary(res.data.data);
-        toast.success(`Validated ${res.data.data.totalRows} rows from CSV`);
+      const data = res.data?.data;
+      if (data) {
+        const previewRows: PreviewRow[] = data.previewRows || [
+          ...(data.valid || []).map((v: any) => ({
+            rowNumber: v.row,
+            data: v.data,
+            isValid: true,
+            errors: [],
+            isDuplicate: false,
+          })),
+          ...(data.duplicates || []).map((d: any) => ({
+            rowNumber: d.row,
+            data: d.data,
+            isValid: true,
+            errors: d.reasons || ['Duplicate'],
+            isDuplicate: true,
+          })),
+          ...(data.invalid || []).map((inv: any) => ({
+            rowNumber: inv.row,
+            data: inv.data,
+            isValid: false,
+            errors: inv.errors || ['Invalid row'],
+            isDuplicate: false,
+          })),
+        ].sort((a: any, b: any) => a.rowNumber - b.rowNumber);
+
+        const total = data.totalRows ?? data.summary?.total ?? previewRows.length;
+        const validCount = data.validRows ?? data.summary?.valid ?? (data.valid?.length || 0);
+        const invalidCount = data.invalidRows ?? data.summary?.invalid ?? (data.invalid?.length || 0);
+        const dupCount = data.duplicateCount ?? data.summary?.duplicates ?? (data.duplicates?.length || 0);
+
+        setSummary({
+          totalRows: total,
+          validRows: validCount,
+          invalidRows: invalidCount,
+          duplicateCount: dupCount,
+          previewRows,
+          cacheKey: data.batchId || data.cacheKey,
+        });
+
+        toast.success(`Validated ${total} rows from CSV`);
       }
     } catch (err: any) {
-      const msg = err.response?.data?.message || 'CSV validation failed';
+      const msg = err.response?.data?.message || err.message || 'CSV validation failed';
       toast.error(msg);
     } finally {
       setPreviewing(false);
@@ -160,17 +276,26 @@ Ananya Iyer,ananya@college.edu,21IT104,IT,2025,9.20,0`;
     try {
       setCommitting(true);
       const res = await studentApi.commitCsvImport({
+        batchId: summary.cacheKey,
         cacheKey: summary.cacheKey,
-        records: summary.previewRows.filter((r) => r.isValid).map((r) => r.data),
+        includeUpdates: true,
+        records: summary.previewRows?.filter((r) => r.isValid).map((r) => r.data) || [],
       });
 
-      if (res.data?.data) {
-        setCommitResult(res.data.data);
+      const resData = res.data?.data;
+      if (resData) {
+        const resultSummary: CommitSummary = {
+          createdCount: resData.createdCount ?? resData.summary?.createdCount ?? resData.summary?.created ?? 0,
+          updatedCount: resData.updatedCount ?? resData.summary?.updatedCount ?? resData.summary?.updated ?? 0,
+          skippedCount: resData.skippedCount ?? resData.summary?.skippedCount ?? 0,
+          failedCount: resData.failedCount ?? resData.summary?.failedCount ?? resData.summary?.failed ?? 0,
+        };
+        setCommitResult(resultSummary);
         toast.success('Student roster imported successfully!');
         fetchStudentRoster();
       }
     } catch (err: any) {
-      const msg = err.response?.data?.message || 'Failed to commit student import';
+      const msg = err.response?.data?.message || err.message || 'Failed to commit student import';
       toast.error(msg);
     } finally {
       setCommitting(false);
@@ -284,7 +409,7 @@ Ananya Iyer,ananya@college.edu,21IT104,IT,2025,9.20,0`;
                       <th className="py-3 px-4">Grad Year</th>
                       <th className="py-3 px-4">CGPA</th>
                       <th className="py-3 px-4">Active Backlogs</th>
-                      <th className="py-3 px-4">Account Status</th>
+                      <th className="py-3 px-4">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800 text-slate-300">
@@ -321,15 +446,13 @@ Ananya Iyer,ananya@college.edu,21IT104,IT,2025,9.20,0`;
                             </span>
                           </td>
                           <td className="py-3 px-4">
-                            {s.user?.isActive ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                                Invited
-                              </span>
-                            )}
+                            <button
+                              onClick={() => handleOpenEdit(s)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold transition-all hover:scale-105"
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>Edit Details</span>
+                            </button>
                           </td>
                         </tr>
                       );
@@ -554,6 +677,253 @@ Ananya Iyer,ananya@college.edu,21IT104,IT,2025,9.20,0`;
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit Student Details Modal (Placement Coordinator Power) */}
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-indigo-400" />
+                  Edit Student Details
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Update credentials, verified academic criteria, and account status as Placement Coordinator.
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingStudent(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="p-6 space-y-4 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Student Full Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.name}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    value={editForm.email}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Roll Number *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.rollNumber}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, rollNumber: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 font-mono focus:outline-none focus:border-indigo-500 uppercase"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Branch / Department *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editForm.branch}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, branch: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Graduation Year (Batch) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={2000}
+                    max={2040}
+                    value={editForm.graduationYear}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, graduationYear: Number(e.target.value) }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    CGPA (0.0 - 10.0) *
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                    value={editForm.cgpa}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, cgpa: Number(e.target.value) }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Active Backlogs Count *
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={editForm.activeBacklogs}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, activeBacklogs: Number(e.target.value) }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Phone Number (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    10th Percentage (Optional)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    value={editForm.tenthPercentage}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, tenthPercentage: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    12th Percentage (Optional)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    value={editForm.twelfthPercentage}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, twelfthPercentage: e.target.value }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Status Controls */}
+              <div className="pt-3 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Account Status
+                  </label>
+                  <select
+                    value={editForm.isActive ? 'active' : 'inactive'}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, isActive: e.target.value === 'active' }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="active">Active (Default)</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Placement Status
+                  </label>
+                  <select
+                    value={editForm.isPlaced ? 'placed' : 'unplaced'}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, isPlaced: e.target.value === 'placed' }))
+                    }
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="unplaced">Unplaced</option>
+                    <option value="placed">Placed (Has Offer)</option>
+                  </select>
+                </div>
+
+                {editForm.isPlaced && (
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">
+                      Placed Company Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Google, Microsoft, Infosys"
+                      value={editForm.placedCompany}
+                      onChange={(e) =>
+                        setEditForm((prev) => ({ ...prev, placedCompany: e.target.value }))
+                      }
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingStudent(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEdit}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-indigo-600/25 transition"
+                >
+                  {savingEdit ? 'Saving Changes...' : 'Save Student Details'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

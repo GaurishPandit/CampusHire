@@ -25,6 +25,7 @@ export const studentApi = {
   // Admin
   listStudents: (params?: Record<string, unknown>) => api.get('/students', { params }),
   getStudent: (id: string) => api.get(`/students/${id}`),
+  updateStudent: (id: string, data: Record<string, any>) => api.patch(`/students/${id}`, data),
   resendInvite: (id: string) => api.post(`/students/${id}/resend-invite`),
 
   // CSV Import
@@ -32,7 +33,7 @@ export const studentApi = {
     api.post('/students/import/preview', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
-  commitCsvImport: (data: { cacheKey?: string; records?: any[] }) =>
+  commitCsvImport: (data: { batchId?: string; cacheKey?: string; records?: any[]; includeUpdates?: boolean }) =>
     api.post('/students/import/confirm', data),
   previewImport: (file: File) => {
     const form = new FormData();
@@ -122,6 +123,12 @@ export const dashboardApi = {
 export const adminApi = {
   getStats: () => api.get('/dashboard/admin'),
   getAuditLogs: (params?: Record<string, unknown>) => api.get('/audit-logs', { params }),
+};
+
+export const notificationApi = {
+  list: () => api.get('/notifications'),
+  markRead: (id: string) => api.patch(`/notifications/${id}/read`),
+  markAllRead: () => api.patch('/notifications/read-all'),
 };
 
 export default api;

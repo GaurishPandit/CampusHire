@@ -2,7 +2,7 @@
 
 const mongoose = require('mongoose');
 
-const OPPORTUNITY_TYPES = ['internship', 'full_time', 'placement'];
+const OPPORTUNITY_TYPES = ['internship', 'full_time', 'placement', 'hackathon', 'coding_competition'];
 const WORK_MODES = ['remote', 'hybrid', 'on_site', 'on-site'];
 const OPPORTUNITY_STATUSES = ['draft', 'published', 'closed', 'completed'];
 const APPLICATION_MODES = ['internal', 'external', 'both'];
@@ -118,10 +118,10 @@ const OpportunitySchema = new mongoose.Schema(
     closedAt: { type: Date },
     completedAt: { type: Date },
 
-    // Metadata for extensibility (hackathons, etc.)
+    // Metadata for extensibility (hackathons, competitions, etc.)
     opportunityCategory: {
       type: String,
-      default: 'placement', // 'placement' | 'competition' (future)
+      default: 'placement', // 'placement' | 'competition' | 'hackathon'
     },
 
     // Slug for SEO-friendly URLs
@@ -129,6 +129,12 @@ const OpportunitySchema = new mongoose.Schema(
 
     // Pinned / featured
     isPinned: { type: Boolean, default: false },
+
+    // Results publication tracking
+    resultsPublished: { type: Boolean, default: false },
+    resultsPublishedAt: { type: Date },
+    resultsPublishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    selectedCount: { type: Number, default: 0 },
   },
   {
     timestamps: true,

@@ -13,6 +13,7 @@ const {
   changeStatusSchema,
   opportunityQuerySchema,
 } = require('../validators/opportunity.validators');
+const { pushToCollegeStudents, pushToCollegeAdmins } = require('./notification.controller');
 
 function normalizeOpportunityInput(raw = {}) {
   const data = { ...raw };
@@ -32,7 +33,14 @@ function normalizeOpportunityInput(raw = {}) {
 
   // Map deadline / applicationDeadline
   if (data.deadline && !data.applicationDeadline) {
-    data.applicationDeadline = new Date(data.deadline);
+    data.applicationDeadline = data.deadline;
+  }
+  if (data.applicationDeadline) {
+    if (typeof data.applicationDeadline === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.applicationDeadline.trim())) {
+      data.applicationDeadline = new Date(`${data.applicationDeadline.trim()}T23:59:59.999Z`);
+    } else {
+      data.applicationDeadline = new Date(data.applicationDeadline);
+    }
   }
 
   // Map externalUrl / externalApplicationUrl
@@ -53,15 +61,27 @@ function normalizeOpportunityInput(raw = {}) {
   if (data.maxBacklogs !== undefined && criteria.maxActiveBacklogs === undefined) {
     criteria.maxActiveBacklogs = parseInt(data.maxBacklogs, 10) || 0;
   }
-  if (data.eligibleBranches !== undefined && !criteria.eligibleBranches) {
-    criteria.eligibleBranches = Array.isArray(data.eligibleBranches)
+  if (data.eligibleBranches !== undefined) {
+    const rawBranches = Array.isArray(data.eligibleBranches)
       ? data.eligibleBranches
-      : String(data.eligibleBranches).split(',').map((b) => b.trim().toUpperCase()).filter(Boolean);
+      : String(data.eligibleBranches).split(',');
+    criteria.eligibleBranches = rawBranches.map((b) => String(b).trim().toUpperCase()).filter(Boolean);
+  } else if (criteria.eligibleBranches) {
+    criteria.eligibleBranches = (Array.isArray(criteria.eligibleBranches) ? criteria.eligibleBranches : [criteria.eligibleBranches])
+      .map((b) => String(b).trim().toUpperCase()).filter(Boolean);
   }
-  if (data.eligibleGraduationYears !== undefined && !criteria.eligibleGraduationYears) {
-    criteria.eligibleGraduationYears = Array.isArray(data.eligibleGraduationYears)
+
+  if (data.eligibleGraduationYears !== undefined) {
+    const rawYears = Array.isArray(data.eligibleGraduationYears)
       ? data.eligibleGraduationYears
-      : String(data.eligibleGraduationYears).split(',').map((y) => parseInt(y.trim(), 10)).filter((y) => !isNaN(y));
+      : String(data.eligibleGraduationYears).split(',');
+    criteria.eligibleGraduationYears = rawYears
+      .map((y) => parseInt(String(y).trim(), 10))
+      .filter((y) => !isNaN(y) && y > 0);
+  } else if (criteria.eligibleGraduationYears) {
+    criteria.eligibleGraduationYears = (Array.isArray(criteria.eligibleGraduationYears) ? criteria.eligibleGraduationYears : [criteria.eligibleGraduationYears])
+      .map((y) => parseInt(String(y).trim(), 10))
+      .filter((y) => !isNaN(y) && y > 0);
   }
   data.eligibilityCriteria = criteria;
 
@@ -107,6 +127,24 @@ async function createOpportunity(req, res, next) {
       req,
     });
 
+    if (opp.status === 'published') {
+      const isComp = opp.opportunityType === 'hackathon' || opp.opportunityType === 'coding_competition';
+      const isHack = opp.opportunityType === 'hackathon';
+      const compLabel = isHack ? 'Hackathon' : 'Coding Competition';
+
+      pushToCollegeStudents({
+        collegeId: req.user.college,
+        type: 'opportunity_published',
+        title: isComp ? `${compLabel} Open: ${opp.title}` : `Drive Open: ${opp.companyName}`,
+        message: isComp
+          ? `${opp.companyName || 'Host'} has launched ${opp.title}. Register now to showcase your skills!`
+          : `${opp.companyName} is hiring for ${opp.title}. Apply now!`,
+        link: `/opportunities/${opp._id}`,
+        resourceType: 'Opportunity',
+        resourceId: opp._id,
+      });
+    }
+
     return created(res, { opportunity: opp }, 'Opportunity created');
   } catch (err) {
     next(err);
@@ -130,9 +168,13 @@ async function listOpportunities(req, res, next) {
 
     const filter = { college: req.user.college };
 
-    // Students only see published opportunities
+    // Students see published, completed, and closed opportunities (not drafts)
     if (!isAdmin) {
-      filter.status = 'published';
+      if (status === 'published' || !status) {
+        filter.status = { $in: ['published', 'completed', 'closed'] };
+      } else {
+        filter.status = status;
+      }
     } else if (status) {
       filter.status = status;
     }
@@ -148,12 +190,25 @@ async function listOpportunities(req, res, next) {
     }
 
     if (branch && !isAdmin) {
-      filter.$or = filter.$or || [];
-      filter['eligibilityCriteria.eligibleBranches'] = { $in: ['', branch] };
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { 'eligibilityCriteria.eligibleBranches': { $size: 0 } },
+          { 'eligibilityCriteria.eligibleBranches': { $exists: false } },
+          { 'eligibilityCriteria.eligibleBranches': branch },
+        ],
+      });
     }
 
     if (graduationYear && !isAdmin) {
-      filter['eligibilityCriteria.eligibleGraduationYears'] = { $in: [graduationYear] };
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { 'eligibilityCriteria.eligibleGraduationYears': { $size: 0 } },
+          { 'eligibilityCriteria.eligibleGraduationYears': { $exists: false } },
+          { 'eligibilityCriteria.eligibleGraduationYears': graduationYear },
+        ],
+      });
     }
 
     const sortField = sortBy || 'createdAt';
@@ -168,13 +223,21 @@ async function listOpportunities(req, res, next) {
       Opportunity.countDocuments(filter),
     ]);
 
+    // Normalize fields for frontend (deadline, type, criteria)
+    let result = opportunities.map((opp) => ({
+      ...opp,
+      deadline: opp.applicationDeadline || opp.deadline,
+      type: opp.opportunityType || opp.type,
+      minCgpa: opp.eligibilityCriteria?.minCgpa ?? opp.minCgpa ?? 0,
+      maxBacklogs: opp.eligibilityCriteria?.maxActiveBacklogs ?? opp.maxBacklogs ?? 0,
+    }));
+
     // Attach eligibility for students
-    let result = opportunities;
     if (!isAdmin) {
       const profile = await StudentProfile.findOne({ user: req.user._id }).lean();
       if (profile) {
         const eligibilityMap = evaluateBulk(profile, opportunities);
-        result = opportunities.map((opp) => ({
+        result = result.map((opp) => ({
           ...opp,
           eligibility: eligibilityMap.get(opp._id.toString()) || null,
         }));
@@ -195,7 +258,7 @@ async function getOpportunityById(req, res, next) {
   try {
     const isAdmin = ['placement_admin', 'sys_admin'].includes(req.user.role);
     const filter = { _id: req.params.id, college: req.user.college };
-    if (!isAdmin) filter.status = 'published';
+    if (!isAdmin) filter.status = { $ne: 'draft' };
 
     const opp = await Opportunity.findOne(filter)
       .populate('createdBy', 'firstName lastName email')
@@ -212,15 +275,38 @@ async function getOpportunityById(req, res, next) {
     }
 
     const RecruitmentRound = require('../models/RecruitmentRound');
-    const rounds = await RecruitmentRound.find({
-      opportunity: opp._id,
-      college: req.user.college,
-      ...(isAdmin ? {} : { isPublished: true }),
-    })
-      .sort({ sequenceNumber: 1 })
-      .lean();
+    const SelectionResult = require('../models/SelectionResult');
+    const [rounds, rawResults] = await Promise.all([
+      RecruitmentRound.find({
+        opportunity: opp._id,
+        college: req.user.college,
+        ...(isAdmin ? {} : { isPublished: true }),
+      })
+        .sort({ sequenceNumber: 1 })
+        .lean(),
+      SelectionResult.find({
+        opportunity: opp._id,
+        college: req.user.college,
+        isPublished: true,
+      })
+        .sort({ createdAt: -1 })
+        .lean(),
+    ]);
+
+    const results = rawResults.map((r) => ({
+      _id: r._id,
+      candidateName: r.publicSnapshot?.studentName || '',
+      rollNumber: r.publicSnapshot?.rollNumber || '',
+      branch: r.publicSnapshot?.branch || '',
+      graduationYear: r.publicSnapshot?.graduationYear,
+      companyName: r.publicSnapshot?.companyName || opp.companyName,
+      opportunityTitle: r.publicSnapshot?.opportunityTitle || opp.title,
+      offeredCTC: r.publicSnapshot?.offeredCTC,
+      publishedAt: r.publishedAt,
+    }));
 
     opp.rounds = rounds;
+    opp.results = results;
     opp.type = opp.opportunityType;
     opp.deadline = opp.applicationDeadline;
 
@@ -229,6 +315,7 @@ async function getOpportunityById(req, res, next) {
       opportunity: opp,
       eligibility,
       rounds,
+      results,
     });
   } catch (err) {
     next(err);
@@ -263,6 +350,7 @@ async function updateOpportunity(req, res, next) {
     if (normalized.eligibilityCriteria) {
       const current = opp.eligibilityCriteria?.toObject ? opp.eligibilityCriteria.toObject() : (opp.eligibilityCriteria || {});
       opp.eligibilityCriteria = { ...current, ...normalized.eligibilityCriteria };
+      opp.markModified('eligibilityCriteria');
     }
     if (normalized.status && opp.canTransitionTo && opp.canTransitionTo(normalized.status)) {
       opp.status = normalized.status;
@@ -326,6 +414,24 @@ async function changeOpportunityStatus(req, res, next) {
       severity: newStatus === 'published' ? 'info' : 'info',
     });
 
+    if (newStatus === 'published' && before.status !== 'published') {
+      const isComp = opp.opportunityType === 'hackathon' || opp.opportunityType === 'coding_competition';
+      const isHack = opp.opportunityType === 'hackathon';
+      const compLabel = isHack ? 'Hackathon' : 'Coding Competition';
+
+      pushToCollegeStudents({
+        collegeId: req.user.college,
+        type: 'opportunity_published',
+        title: isComp ? `${compLabel} Open: ${opp.title}` : `Drive Open: ${opp.companyName}`,
+        message: isComp
+          ? `${opp.companyName || 'Host'} has opened registrations for ${opp.title}. Register now!`
+          : `${opp.companyName} has opened recruitment for ${opp.title}. Apply now!`,
+        link: `/opportunities/${opp._id}`,
+        resourceType: 'Opportunity',
+        resourceId: opp._id,
+      });
+    }
+
     return success(res, { opportunity: opp }, `Opportunity ${newStatus} successfully`);
   } catch (err) {
     next(err);
@@ -372,7 +478,7 @@ async function checkEligibility(req, res, next) {
     const opp = await Opportunity.findOne({
       _id: req.params.id,
       college: req.user.college,
-      status: 'published',
+      status: { $ne: 'draft' },
     }).lean();
     if (!opp) return next(createError('Opportunity not found', 404));
 

@@ -15,8 +15,8 @@ const ROUND_OUTCOMES = ['pending', 'advanced', 'rejected', 'skipped', 'selected'
 
 // Valid application status transitions
 const VALID_APP_TRANSITIONS = {
-  submitted: ['under_review', 'shortlisted', 'rejected', 'withdrawn'],
-  under_review: ['shortlisted', 'rejected', 'withdrawn'],
+  submitted: ['under_review', 'shortlisted', 'selected', 'rejected', 'withdrawn'],
+  under_review: ['shortlisted', 'selected', 'rejected', 'withdrawn'],
   shortlisted: ['rejected', 'selected', 'withdrawn'],
   rejected: [], // terminal
   withdrawn: [], // terminal
@@ -112,6 +112,7 @@ ApplicationSchema.index({ student: 1, status: 1 });
  * Check valid status transition.
  */
 ApplicationSchema.methods.canTransitionTo = function (newStatus) {
+  if (this.status === newStatus) return true;
   return VALID_APP_TRANSITIONS[this.status]?.includes(newStatus) ?? false;
 };
 

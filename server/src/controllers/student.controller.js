@@ -31,22 +31,55 @@ async function previewImport(req, res, next) {
     let rows;
     try {
       rows = parse(req.file.buffer, {
-        columns: true,
+        bom: true,
+        columns: (headerList) => headerList.map((h) => h.trim().replace(/^[\uFEFF\u200B]+/, '')),
         skip_empty_lines: true,
         trim: true,
-        cast: true,
+        cast: false,
       });
     } catch (parseErr) {
       return next(createError(`CSV parse error: ${parseErr.message}`, 400));
     }
 
-    if (rows.length === 0) return next(createError('CSV file is empty', 400));
+    if (!rows || rows.length === 0) return next(createError('CSV file is empty', 400));
 
-    // Validate headers
-    const headers = Object.keys(rows[0]).map((h) => h.toLowerCase().trim());
-    const missingHeaders = EXPECTED_HEADERS.filter((h) => !headers.includes(h.toLowerCase()));
-    if (missingHeaders.length > 0) {
-      return next(createError(`Missing required CSV columns: ${missingHeaders.join(', ')}`, 400));
+    // Flexible column resolver with aliases
+    const resolveRowValue = (row, ...aliases) => {
+      for (const alias of aliases) {
+        if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim() !== '') {
+          return String(row[alias]).trim();
+        }
+      }
+      const rowKeys = Object.keys(row);
+      for (const alias of aliases) {
+        const cleanAlias = alias.toLowerCase().replace(/[\s_-]+/g, '');
+        const matchedKey = rowKeys.find(
+          (k) => k.toLowerCase().replace(/[\s_-]+/g, '') === cleanAlias
+        );
+        if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== null) {
+          const val = String(row[matchedKey]).trim();
+          if (val !== '') return val;
+        }
+      }
+      return '';
+    };
+
+    // Validate headers presence using aliases
+    const rawHeaders = Object.keys(rows[0]).map((h) => h.toLowerCase().replace(/[\s_-]+/g, ''));
+    const requiredDefs = [
+      { key: 'name', aliases: ['name', 'fullname', 'studentname', 'candidatename'] },
+      { key: 'email', aliases: ['email', 'emailaddress', 'mail'] },
+      { key: 'rollNumber', aliases: ['rollnumber', 'rollno', 'roll', 'studentrollnumber'] },
+      { key: 'branch', aliases: ['branch', 'department', 'dept', 'stream'] },
+      { key: 'graduationYear', aliases: ['graduationyear', 'gradyear', 'batch', 'year', 'passingyear'] },
+    ];
+
+    const missingColumns = requiredDefs
+      .filter((def) => !def.aliases.some((alias) => rawHeaders.includes(alias)))
+      .map((def) => def.key);
+
+    if (missingColumns.length > 0) {
+      return next(createError(`Missing required CSV columns: ${missingColumns.join(', ')}`, 400));
     }
 
     // Existing emails and roll numbers in college for duplicate detection
@@ -55,7 +88,9 @@ async function previewImport(req, res, next) {
       .select('rollNumber user')
       .populate('user', 'email')
       .lean();
-    const existingRollNumbers = new Set(existingProfiles.map((p) => p.rollNumber?.toUpperCase()));
+    const existingRollNumbers = new Set(
+      existingProfiles.map((p) => p.rollNumber?.toUpperCase()).filter(Boolean)
+    );
     const existingEmails = new Set(
       existingProfiles.map((p) => p.user?.email?.toLowerCase()).filter(Boolean)
     );
@@ -69,18 +104,29 @@ async function previewImport(req, res, next) {
       const rowNum = i + 2; // 1-indexed, +1 for header row
       const errors = [];
 
+      const rawName = resolveRowValue(row, 'name', 'fullName', 'studentName');
+      const rawEmail = resolveRowValue(row, 'email', 'emailAddress');
+      const rawRoll = resolveRowValue(row, 'rollNumber', 'rollNo', 'roll_number', 'roll');
+      const rawBranch = resolveRowValue(row, 'branch', 'department', 'dept');
+      const rawGradYear = resolveRowValue(row, 'graduationYear', 'graduation_year', 'gradYear', 'batch', 'year');
+      const rawCgpa = resolveRowValue(row, 'cgpa', 'gpa');
+      const rawBacklogs = resolveRowValue(row, 'activeBacklogs', 'active_backlogs', 'backlogs');
+      const rawPhone = resolveRowValue(row, 'phone', 'phoneNumber', 'mobile');
+
+      const parsedGradYear = parseInt(rawGradYear, 10);
+      const parsedCgpa = rawCgpa !== '' ? parseFloat(rawCgpa) : null;
+      const parsedBacklogs = rawBacklogs !== '' ? parseInt(rawBacklogs, 10) : 0;
+
       // Normalize
       const normalized = {
-        name: String(row.name || '').trim(),
-        email: String(row.email || '').trim().toLowerCase(),
-        rollNumber: String(row.rollNumber || '').trim().toUpperCase(),
-        branch: String(row.branch || '').trim(),
-        graduationYear: parseInt(row.graduationYear, 10),
-        cgpa: row.cgpa !== '' && row.cgpa !== null && row.cgpa !== undefined ? parseFloat(row.cgpa) : null,
-        activeBacklogs: row.activeBacklogs !== '' ? parseInt(row.activeBacklogs, 10) : 0,
-        phone: row.phone ? String(row.phone).trim() : undefined,
-        tenthPercentage: row.tenthPercentage ? parseFloat(row.tenthPercentage) : undefined,
-        twelfthPercentage: row.twelfthPercentage ? parseFloat(row.twelfthPercentage) : undefined,
+        name: rawName,
+        email: rawEmail.toLowerCase(),
+        rollNumber: rawRoll.toUpperCase(),
+        branch: rawBranch,
+        graduationYear: isNaN(parsedGradYear) ? 0 : parsedGradYear,
+        cgpa: parsedCgpa !== null && !isNaN(parsedCgpa) ? parsedCgpa : 0,
+        activeBacklogs: isNaN(parsedBacklogs) ? 0 : parsedBacklogs,
+        phone: rawPhone || undefined,
       };
 
       // Field validation
@@ -90,14 +136,14 @@ async function previewImport(req, res, next) {
       if (!normalized.rollNumber) errors.push('Roll number is required');
       if (!normalized.branch) errors.push('Branch is required');
       if (isNaN(normalized.graduationYear) || normalized.graduationYear < 2000)
-        errors.push('Invalid graduation year');
+        errors.push('Invalid graduation year (must be >= 2000)');
       if (normalized.cgpa !== null && (isNaN(normalized.cgpa) || normalized.cgpa < 0 || normalized.cgpa > 10))
         errors.push('CGPA must be between 0 and 10');
       if (isNaN(normalized.activeBacklogs) || normalized.activeBacklogs < 0)
         errors.push('Invalid active backlogs count');
 
       if (errors.length > 0) {
-        invalid.push({ row: rowNum, data: row, errors });
+        invalid.push({ row: rowNum, data: normalized, errors });
         continue;
       }
 
@@ -110,10 +156,10 @@ async function previewImport(req, res, next) {
           row: rowNum,
           data: normalized,
           reasons: [
-            ...(isDupRoll ? [`Roll number ${normalized.rollNumber} already exists`] : []),
-            ...(isDupEmail ? [`Email ${normalized.email} already exists`] : []),
+            ...(isDupRoll ? [`Roll number ${normalized.rollNumber} already exists in database`] : []),
+            ...(isDupEmail ? [`Email ${normalized.email} already registered`] : []),
           ],
-          action: 'update', // will be offered as update option in confirm step
+          action: 'update',
         });
         continue;
       }
@@ -132,18 +178,56 @@ async function previewImport(req, res, next) {
     // Auto-expire cache entries after 1 hour
     setTimeout(() => previewCache.delete(batchId), 60 * 60 * 1000);
 
-    return success(res, {
-      batchId,
-      summary: {
-        total: rows.length,
-        valid: valid.length,
-        invalid: invalid.length,
-        duplicates: duplicates.length,
+    const previewRows = [
+      ...valid.map((v) => ({
+        rowNumber: v.row,
+        data: v.data,
+        isValid: true,
+        errors: [],
+        isDuplicate: false,
+      })),
+      ...duplicates.map((d) => ({
+        rowNumber: d.row,
+        data: d.data,
+        isValid: true,
+        errors: d.reasons,
+        isDuplicate: true,
+      })),
+      ...invalid.map((inv) => ({
+        rowNumber: inv.row,
+        data: inv.data,
+        isValid: false,
+        errors: inv.errors,
+        isDuplicate: false,
+      })),
+    ].sort((a, b) => a.rowNumber - b.rowNumber);
+
+    return success(
+      res,
+      {
+        batchId,
+        cacheKey: batchId,
+        totalRows: rows.length,
+        validRows: valid.length,
+        invalidRows: invalid.length,
+        duplicateCount: duplicates.length,
+        previewRows,
+        summary: {
+          total: rows.length,
+          totalRows: rows.length,
+          valid: valid.length,
+          validRows: valid.length,
+          invalid: invalid.length,
+          invalidRows: invalid.length,
+          duplicates: duplicates.length,
+          duplicateCount: duplicates.length,
+        },
+        valid,
+        invalid,
+        duplicates,
       },
-      valid,
-      invalid,
-      duplicates,
-    }, 'Preview generated. Review and confirm to import.');
+      'Preview generated. Review and confirm to import.'
+    );
   } catch (err) {
     next(err);
   }
@@ -155,20 +239,28 @@ async function previewImport(req, res, next) {
  */
 async function confirmImport(req, res, next) {
   try {
-    const { batchId, includeUpdates = false } = req.body;
+    const batchId = req.body.batchId || req.body.cacheKey;
+    const includeUpdates = req.body.includeUpdates !== false;
 
-    const cached = previewCache.get(batchId);
-    if (!cached) {
+    let rowsToProcess = [];
+    const collegeId = req.user.college?.toString();
+
+    const cached = batchId ? previewCache.get(batchId) : null;
+    if (cached) {
+      if (cached.collegeId !== collegeId) {
+        return next(createError('Forbidden', 403));
+      }
+      rowsToProcess = [...cached.valid, ...(includeUpdates ? cached.duplicates : [])];
+    } else if (Array.isArray(req.body.records) && req.body.records.length > 0) {
+      // Fallback: direct import if session cache is unavailable
+      rowsToProcess = req.body.records.map((r, idx) => ({ row: idx + 2, data: r }));
+    } else {
       return next(createError('Preview session expired or invalid. Please re-upload the CSV.', 400));
     }
-    if (cached.collegeId !== req.user.college?.toString()) {
-      return next(createError('Forbidden', 403));
-    }
 
-    const { valid, duplicates } = cached;
-    const rowsToProcess = [...valid, ...(includeUpdates ? duplicates : [])];
-
-    let created_count = 0, updated_count = 0, failed_count = 0;
+    let created_count = 0,
+      updated_count = 0,
+      failed_count = 0;
     const errors = [];
 
     for (const entry of rowsToProcess) {
@@ -177,19 +269,18 @@ async function confirmImport(req, res, next) {
         // Find or create user
         let user = await User.findOne({ email: data.email });
         if (!user) {
-          // Create user in deactivated state — activated via invitation
           user = new User({
             email: data.email,
             role: 'student',
-            college: cached.collegeId,
-            firstName: data.name.split(' ')[0],
-            lastName: data.name.split(' ').slice(1).join(' ') || undefined,
-            isActive: false,
+            college: collegeId,
+            firstName: data.name ? data.name.split(' ')[0] : 'Student',
+            lastName: data.name ? data.name.split(' ').slice(1).join(' ') || undefined : undefined,
+            isActive: true, // active for all
+            activatedAt: new Date(),
             invitedBy: req.user._id,
             invitedAt: new Date(),
           });
 
-          // Generate invitation token
           const rawToken = generateToken(32);
           user.invitationToken = hashToken(rawToken);
           user.invitationTokenExpires = new Date(
@@ -197,7 +288,6 @@ async function confirmImport(req, res, next) {
           );
           await user.save();
 
-          // Send invitation email
           const activationUrl = `${env.CLIENT_URL}/activate?token=${rawToken}`;
           sendInvitationEmail({
             to: user.email,
@@ -205,12 +295,15 @@ async function confirmImport(req, res, next) {
             activationUrl,
             expiresInHours: env.INVITE_TOKEN_EXPIRES_HOURS,
           }).catch((e) => logger.warn(`Invitation email failed for ${user.email}:`, e));
+        } else if (!user.isActive) {
+          user.isActive = true;
+          user.activatedAt = user.activatedAt || new Date();
+          await user.save();
         }
 
-        // Upsert student profile
         const profileData = {
           user: user._id,
-          college: cached.collegeId,
+          college: collegeId,
           rollNumber: data.rollNumber,
           branch: data.branch,
           graduationYear: data.graduationYear,
@@ -222,10 +315,14 @@ async function confirmImport(req, res, next) {
           academicDataVerified: true,
           verifiedBy: req.user._id,
           verifiedAt: new Date(),
-          importBatchId: batchId,
+          importBatchId: batchId || 'direct-import',
         };
 
-        const existing = await StudentProfile.findOne({ user: user._id });
+        const existing = await StudentProfile.findOne({
+          college: collegeId,
+          $or: [{ user: user._id }, { rollNumber: data.rollNumber }],
+        });
+
         if (existing) {
           Object.assign(existing, profileData);
           await existing.save();
@@ -241,7 +338,7 @@ async function confirmImport(req, res, next) {
       }
     }
 
-    previewCache.delete(batchId);
+    if (batchId) previewCache.delete(batchId);
 
     await audit({
       action: 'student.imported',
@@ -252,9 +349,26 @@ async function confirmImport(req, res, next) {
       req,
     });
 
-    return success(res, {
-      summary: { created: created_count, updated: updated_count, failed: failed_count, errors },
-    }, 'Import completed');
+    return success(
+      res,
+      {
+        createdCount: created_count,
+        updatedCount: updated_count,
+        skippedCount: 0,
+        failedCount: failed_count,
+        summary: {
+          created: created_count,
+          updated: updated_count,
+          failed: failed_count,
+          createdCount: created_count,
+          updatedCount: updated_count,
+          skippedCount: 0,
+          failedCount: failed_count,
+          errors,
+        },
+      },
+      'Import completed'
+    );
   } catch (err) {
     next(err);
   }
@@ -277,6 +391,13 @@ async function listStudents(req, res, next) {
     if (branch) filter.branch = new RegExp(branch, 'i');
     if (graduationYear) filter.graduationYear = graduationYear;
     if (typeof isPlaced === 'boolean') filter.isPlaced = isPlaced;
+
+    // Ensure all student accounts in college are active
+    const userCollegeFilter = req.user.college ? { college: req.user.college } : {};
+    await User.updateMany(
+      { ...userCollegeFilter, role: 'student', isActive: { $ne: true } },
+      { $set: { isActive: true } }
+    );
 
     let profileQuery = StudentProfile.find(filter)
       .populate('user', 'email firstName lastName isActive lastLoginAt')
@@ -438,6 +559,123 @@ async function resendInvite(req, res, next) {
   }
 }
 
+/**
+ * PATCH /api/v1/students/:id
+ * Admin / Placement Coordinator: update student details (academic, personal, account).
+ */
+async function updateStudentByAdmin(req, res, next) {
+  try {
+    const filter = { _id: req.params.id };
+    if (req.user.college) filter.college = req.user.college;
+
+    const profile = await StudentProfile.findOne(filter).populate('user');
+    if (!profile) return next(createError('Student not found', 404));
+
+    const {
+      name,
+      firstName,
+      lastName,
+      email,
+      rollNumber,
+      branch,
+      graduationYear,
+      cgpa,
+      activeBacklogs,
+      tenthPercentage,
+      twelfthPercentage,
+      phone,
+      phoneNumber,
+      isActive,
+      isPlaced,
+      placedCompany,
+      academicDataVerified,
+    } = req.body;
+
+    // Update User model fields
+    if (profile.user) {
+      if (email && email.toLowerCase().trim() !== profile.user.email) {
+        const existingEmail = await User.findOne({
+          email: email.toLowerCase().trim(),
+          _id: { $ne: profile.user._id },
+        });
+        if (existingEmail) {
+          return next(createError('Email already in use by another account', 400));
+        }
+        profile.user.email = email.toLowerCase().trim();
+      }
+
+      if (firstName !== undefined) profile.user.firstName = firstName.trim();
+      if (lastName !== undefined) profile.user.lastName = lastName.trim();
+      if (name !== undefined) {
+        const parts = name.trim().split(' ');
+        profile.user.firstName = parts[0] || 'Student';
+        profile.user.lastName = parts.slice(1).join(' ') || undefined;
+      }
+      if (typeof isActive === 'boolean') {
+        profile.user.isActive = isActive;
+      } else {
+        profile.user.isActive = true;
+      }
+      await profile.user.save();
+    }
+
+    // Update StudentProfile fields
+    if (rollNumber !== undefined) {
+      const cleanRoll = String(rollNumber).trim().toUpperCase();
+      if (cleanRoll !== profile.rollNumber) {
+        const existingRoll = await StudentProfile.findOne({
+          college: profile.college,
+          rollNumber: cleanRoll,
+          _id: { $ne: profile._id },
+        });
+        if (existingRoll) {
+          return next(
+            createError('Roll number already assigned to another student in this college', 400)
+          );
+        }
+        profile.rollNumber = cleanRoll;
+      }
+    }
+
+    if (branch !== undefined) profile.branch = String(branch).trim();
+    if (graduationYear !== undefined) profile.graduationYear = Number(graduationYear);
+    if (cgpa !== undefined) profile.cgpa = Number(cgpa);
+    if (activeBacklogs !== undefined) profile.activeBacklogs = Number(activeBacklogs);
+    if (tenthPercentage !== undefined)
+      profile.tenthPercentage = tenthPercentage !== '' ? Number(tenthPercentage) : undefined;
+    if (twelfthPercentage !== undefined)
+      profile.twelfthPercentage = twelfthPercentage !== '' ? Number(twelfthPercentage) : undefined;
+    if (phone !== undefined || phoneNumber !== undefined)
+      profile.phone = String(phone || phoneNumber || '').trim();
+    if (typeof isPlaced === 'boolean') profile.isPlaced = isPlaced;
+    if (placedCompany !== undefined) profile.placedCompany = placedCompany;
+    if (typeof academicDataVerified === 'boolean')
+      profile.academicDataVerified = academicDataVerified;
+
+    profile.verifiedBy = req.user._id;
+    profile.verifiedAt = new Date();
+    await profile.save();
+
+    await audit({
+      action: 'student.updated_by_admin',
+      actor: req.user,
+      collegeId: req.user.college,
+      resourceType: 'StudentProfile',
+      resourceId: profile._id,
+      description: `Placement coordinator updated student: ${profile.user?.email || profile.rollNumber}`,
+      req,
+    });
+
+    const updatedProfile = await StudentProfile.findById(profile._id)
+      .populate('user', 'email firstName lastName isActive lastLoginAt')
+      .lean();
+
+    return success(res, { profile: updatedProfile }, 'Student details updated successfully');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   previewImport,
   confirmImport,
@@ -445,5 +683,6 @@ module.exports = {
   getMyProfile,
   updateMyProfile,
   getStudentById,
+  updateStudentByAdmin,
   resendInvite,
 };

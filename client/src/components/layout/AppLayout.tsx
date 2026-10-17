@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Briefcase, FileText, BarChart3, Users,
@@ -6,7 +6,32 @@ import {
   Bell, Search, Shield, User
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { notificationApi } from '@/api';
 import toast from 'react-hot-toast';
+
+interface NotificationItem {
+  _id: string;
+  title: string;
+  message: string;
+  link?: string;
+  isRead: boolean;
+  createdAt: string;
+  type?: string;
+}
+
+function formatRelativeTime(dateStr?: string) {
+  if (!dateStr) return 'Just now';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString();
+}
 
 interface NavItem {
   label: string;
@@ -35,56 +60,85 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [unreadCount, setUnreadCount] = useState(3);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState<number>(0);
+  const notifRef = useRef<HTMLDivElement>(null);
 
-  const isStudent = user?.role === 'student';
-  const notifications = isStudent
-    ? [
-        {
-          id: '1',
-          title: 'Academic Profile Verified',
-          message: 'Your official CGPA and enrollment details have been verified by the placement office.',
-          time: '1h ago',
-          link: '/profile',
-        },
-        {
-          id: '2',
-          title: 'New Campus Opportunity',
-          message: 'Microsoft and FinServ campus placement drives are open for eligible branches.',
-          time: '3h ago',
-          link: '/opportunities',
-        },
-        {
-          id: '3',
-          title: 'Official Selection Results',
-          message: 'New selection results published by the placement cell.',
-          time: '1d ago',
-          link: '/results',
-        },
-      ]
-    : [
-        {
-          id: '1',
-          title: 'System Operational',
-          message: 'CampusHire recruitment engine is active and tracking live candidate pipelines.',
-          time: 'Just now',
-          link: '/admin',
-        },
-        {
-          id: '2',
-          title: 'Candidate Applications',
-          message: 'New student applications submitted for review across opportunities.',
-          time: '2h ago',
-          link: '/admin/opportunities',
-        },
-        {
-          id: '3',
-          title: 'Audit Logging Active',
-          message: 'Administrative and publishing actions are being recorded to compliance audit trail.',
-          time: '1d ago',
-          link: '/admin/audit',
-        },
-      ];
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await notificationApi.list();
+      const data = res.data?.data || res.data;
+      if (data?.notifications) {
+        setNotifications(data.notifications);
+        setUnreadCount(
+          data.unreadCount ??
+            data.notifications.filter((n: NotificationItem) => !n.isRead).length
+        );
+      }
+    } catch {
+      // background polling fails silently
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchNotifications();
+      const timer = setInterval(fetchNotifications, 25000);
+      return () => clearInterval(timer);
+    }
+  }, [user, fetchNotifications]);
+
+  // Close notifications dropdown when clicking anywhere else on screen or pressing Escape
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent | TouchEvent) {
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+        setNotificationsOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setNotificationsOpen(false);
+      }
+    }
+    if (notificationsOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('touchstart', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [notificationsOpen]);
+
+  const handleNotificationClick = async (n: NotificationItem) => {
+    setNotificationsOpen(false);
+    if (!n.isRead) {
+      setNotifications((prev) =>
+        prev.map((item) => (item._id === n._id ? { ...item, isRead: true } : item))
+      );
+      setUnreadCount((prev) => Math.max(0, prev - 1));
+      try {
+        await notificationApi.markRead(n._id);
+      } catch {
+        // silent
+      }
+    }
+    if (n.link) {
+      navigate(n.link);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    setNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+    setUnreadCount(0);
+    try {
+      await notificationApi.markAllRead();
+    } catch {
+      // silent
+    }
+  };
 
   const userNavItems = navItems.filter(
     (item) => user?.role && item.roles.includes(user.role)
@@ -201,8 +255,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top bar */}
         <header
-          className="h-16 flex items-center gap-4 px-6 border-b flex-shrink-0"
-          style={{ borderColor: 'rgb(71 85 105 / 0.4)', background: 'rgb(15 23 42 / 0.8)', backdropFilter: 'blur(8px)' }}
+          className="h-16 flex items-center gap-4 px-6 border-b flex-shrink-0 relative z-40"
+          style={{ borderColor: 'rgb(71 85 105 / 0.4)', background: 'rgb(15 23 42 / 0.95)', backdropFilter: 'blur(12px)' }}
         >
           <button
             onClick={() => setSidebarOpen(true)}
@@ -211,70 +265,102 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Menu size={20} />
           </button>
           <div className="flex-1" />
-          <div className="relative">
+          <div className="relative" ref={notifRef}>
             <button
               onClick={() => setNotificationsOpen(!notificationsOpen)}
-              className="relative p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors"
+              className="relative p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/50 transition-colors cursor-pointer"
               title="Notifications"
             >
               <Bell size={18} />
               {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-indigo-500 ring-2 ring-slate-900 animate-pulse" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-500 ring-2 ring-slate-900 animate-pulse" />
               )}
             </button>
 
             {notificationsOpen && (
               <div
-                className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl z-50 overflow-hidden animate-fadeIn"
-                style={{ background: 'rgb(15 23 42)', borderColor: 'rgb(51 65 85)' }}
+                className="absolute right-0 mt-2.5 w-80 sm:w-96 rounded-2xl border shadow-2xl z-50 overflow-hidden ring-1 ring-white/10 animate-fadeIn"
+                style={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
               >
-                <div className="p-3.5 border-b flex items-center justify-between" style={{ borderColor: 'rgb(51 65 85)' }}>
+                <div
+                  className="px-4 py-3 border-b flex items-center justify-between"
+                  style={{ backgroundColor: '#0f172a', borderColor: '#334155' }}
+                >
                   <div className="flex items-center gap-2">
-                    <Bell size={15} className="text-indigo-400" />
+                    <Bell size={15} className="text-blue-400" />
                     <h4 className="text-xs font-bold text-white tracking-wide">Notifications</h4>
                     {unreadCount > 0 && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-400 border border-blue-500/30">
                         {unreadCount} new
                       </span>
                     )}
                   </div>
                   {unreadCount > 0 && (
                     <button
-                      onClick={() => setUnreadCount(0)}
-                      className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold transition-colors"
+                      onClick={handleMarkAllRead}
+                      className="text-[11px] text-blue-400 hover:text-blue-300 font-semibold transition-colors cursor-pointer"
                     >
                       Mark all as read
                     </button>
                   )}
                 </div>
 
-                <div className="max-h-80 overflow-y-auto divide-y" style={{ borderColor: 'rgb(30 41 59)' }}>
-                  {notifications.map((n) => (
-                    <Link
-                      key={n.id}
-                      to={n.link || '#'}
-                      onClick={() => {
-                        setNotificationsOpen(false);
-                        setUnreadCount((prev) => Math.max(0, prev - 1));
-                      }}
-                      className="p-3.5 block hover:bg-slate-800/50 transition-colors group"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-1 w-2 h-2 rounded-full bg-indigo-400 shrink-0 group-hover:scale-125 transition-transform" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-white group-hover:text-indigo-300 transition-colors truncate">
-                            {n.title}
-                          </p>
-                          <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
-                            {n.message}
-                          </p>
-                          <span className="text-[10px] text-slate-500 mt-1 block font-mono">
-                            {n.time}
-                          </span>
-                        </div>
-                      </div>
-                    </Link>
-                  ))}
+                <div
+                  className="max-h-84 overflow-y-auto divide-y"
+                  style={{ backgroundColor: '#1e293b', borderColor: '#334155' }}
+                >
+                  {notifications.length === 0 ? (
+                    <div className="p-8 text-center">
+                      <Bell size={24} className="mx-auto text-slate-500 mb-2 opacity-40" />
+                      <p className="text-xs font-semibold text-slate-300">No notifications yet</p>
+                      <p className="text-[11px] text-slate-400 mt-1">Updates on drives, competitions, applications, and results will appear here.</p>
+                    </div>
+                  ) : (
+                    notifications.map((n) => {
+                      const isComp =
+                        n.title?.toLowerCase().includes('hackathon') ||
+                        n.title?.toLowerCase().includes('competition') ||
+                        n.title?.toLowerCase().includes('contest') ||
+                        n.title?.toLowerCase().includes('winner') ||
+                        n.title?.includes('🏆');
+                      return (
+                        <button
+                          key={n._id}
+                          type="button"
+                          onClick={() => handleNotificationClick(n)}
+                          className={`w-full text-left p-3.5 block transition-colors group cursor-pointer ${
+                            !n.isRead ? 'bg-slate-800/80 hover:bg-slate-700/80' : 'hover:bg-slate-800/40'
+                          }`}
+                          style={{ borderColor: 'rgb(51 65 85 / 0.5)' }}
+                        >
+                          <div className="flex items-start gap-3">
+                            <div className="mt-1 flex items-center justify-center shrink-0">
+                              {!n.isRead ? (
+                                <span
+                                  className={`w-2.5 h-2.5 rounded-full ring-2 shrink-0 group-hover:scale-125 transition-transform ${
+                                    isComp ? 'bg-amber-400 ring-amber-500/30' : 'bg-blue-400 ring-blue-500/30'
+                                  }`}
+                                />
+                              ) : null}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className={`text-xs font-semibold truncate ${!n.isRead ? 'text-white' : 'text-slate-300'}`}>
+                                  {n.title}
+                                </p>
+                                <span className="text-[10px] text-slate-400 shrink-0 font-mono">
+                                  {formatRelativeTime(n.createdAt)}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                                {n.message}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}

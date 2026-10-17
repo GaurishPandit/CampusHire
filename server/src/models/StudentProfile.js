@@ -48,7 +48,7 @@ const StudentProfileSchema = new mongoose.Schema(
     twelfthPercentage: { type: Number, min: 0, max: 100 },
 
     // Academic verification metadata
-    academicDataVerified: { type: Boolean, default: false },
+    academicDataVerified: { type: Boolean, default: true },
     verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     verifiedAt: { type: Date },
     importBatchId: { type: String }, // tracks which CSV import this came from

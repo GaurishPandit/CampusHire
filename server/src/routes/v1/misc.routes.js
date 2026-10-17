@@ -7,6 +7,7 @@ const appController = require('../../controllers/application.controller');
 const roundController = require('../../controllers/round.controller');
 const resultController = require('../../controllers/result.controller');
 const dashController = require('../../controllers/dashboard.controller');
+const notifController = require('../../controllers/notification.controller');
 
 // Applications
 router.get('/applications/me', authenticate, requireRole('student'), appController.getMyApplications);
@@ -34,5 +35,10 @@ router.get('/dashboard/student', authenticate, requireRole('student'), dashContr
 // Audit logs
 router.get('/audit-logs', authenticate, requireRole('placement_admin', 'sys_admin'), dashController.listAuditLogs);
 router.get('/admin/audit-logs', authenticate, requireRole('placement_admin', 'sys_admin'), dashController.listAuditLogs);
+
+// Notifications
+router.get('/notifications', authenticate, notifController.listNotifications);
+router.patch('/notifications/read-all', authenticate, notifController.markAllRead);
+router.patch('/notifications/:id/read', authenticate, notifController.markRead);
 
 module.exports = router;

@@ -9,6 +9,7 @@ const { success, created, paginated } = require('../utils/apiResponse');
 const { parsePagination, buildPaginationMeta } = require('../utils/helpers');
 const { audit } = require('../services/audit.service');
 const { evaluateEligibility } = require('../services/eligibility.service');
+const { pushNotification, pushToCollegeAdmins } = require('./notification.controller');
 const { z } = require('zod');
 
 const submitApplicationSchema = z
@@ -114,6 +115,38 @@ async function submitApplication(req, res, next) {
       req,
     });
 
+    const isComp = opp.opportunityType === 'hackathon' || opp.opportunityType === 'coding_competition';
+    const isHack = opp.opportunityType === 'hackathon';
+    const compLabel = isHack ? 'Hackathon' : 'Coding Competition';
+
+    // Notify student
+    pushNotification({
+      recipientId: req.user._id,
+      collegeId: req.user.college,
+      type: 'application_status',
+      title: isComp ? `Registered: ${opp.title}` : `Applied: ${opp.companyName}`,
+      message: isComp
+        ? `Your registration for ${opp.title} (${opp.companyName}) was confirmed successfully.`
+        : `Your application for ${opp.companyName} (${opp.title}) was submitted successfully.`,
+      link: '/applications',
+      resourceType: 'Application',
+      resourceId: application._id,
+    });
+
+    // Notify admins
+    const studentName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.email;
+    pushToCollegeAdmins({
+      collegeId: req.user.college,
+      type: 'new_application',
+      title: isComp ? `New Participant: ${opp.title}` : `New Candidate: ${opp.companyName}`,
+      message: isComp
+        ? `${studentName} registered for ${opp.title}.`
+        : `${studentName} applied for ${opp.companyName} (${opp.title}).`,
+      link: `/admin/opportunities`,
+      resourceType: 'Application',
+      resourceId: application._id,
+    });
+
     return created(res, { application }, 'Application submitted successfully');
   } catch (err) {
     if (err.code === 11000) {
@@ -135,7 +168,7 @@ async function getMyApplications(req, res, next) {
 
     const [applications, total] = await Promise.all([
       Application.find({ student: req.user._id })
-        .populate('opportunity', 'companyName title opportunityType status applicationDeadline')
+        .populate('opportunity', 'companyName title opportunityType type workMode applicationMode status applicationDeadline deadline externalUrl externalApplicationUrl')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -143,7 +176,14 @@ async function getMyApplications(req, res, next) {
       Application.countDocuments({ student: req.user._id }),
     ]);
 
-    return paginated(res, applications, buildPaginationMeta(page, limit, total));
+    const formatted = applications.map((app) => ({
+      ...app,
+      personalStatus: app.status,
+      appliedAt: app.createdAt,
+      applicationMode: app.applicationType || app.applicationMode,
+    }));
+
+    return paginated(res, formatted, buildPaginationMeta(page, limit, total));
   } catch (err) {
     next(err);
   }
@@ -176,7 +216,25 @@ async function listApplicationsForOpportunity(req, res, next) {
       Application.countDocuments(filter),
     ]);
 
-    return paginated(res, applications, buildPaginationMeta(page, limit, total));
+    const formatted = applications.map((app) => ({
+      ...app,
+      personalStatus: app.status,
+      appliedAt: app.createdAt,
+      applicationMode: app.applicationType || app.applicationMode,
+      isExternalSelfReported: app.externalApplicationConfirmed,
+      student: app.student
+        ? {
+            ...app.student,
+            name: `${app.student.firstName || ''} ${app.student.lastName || ''}`.trim() || app.student.email,
+            rollNumber: app.studentProfile?.rollNumber || '',
+            branch: app.studentProfile?.branch || '',
+            cgpa: app.studentProfile?.cgpa ?? '',
+            graduationYear: app.studentProfile?.graduationYear ?? '',
+          }
+        : app.student,
+    }));
+
+    return paginated(res, formatted, buildPaginationMeta(page, limit, total));
   } catch (err) {
     next(err);
   }
@@ -195,14 +253,24 @@ async function updateApplicationStatus(req, res, next) {
     }
 
     const app = await Application.findById(req.params.id)
-      .populate('opportunity', 'college companyName title');
+      .populate('opportunity', 'college companyName title opportunityType type');
 
     if (!app) return next(createError('Application not found', 404));
     if (app.opportunity.college.toString() !== req.user.college?.toString()) {
       return next(createError('Forbidden', 403));
     }
 
-    if (!app.canTransitionTo(parse.data.status)) {
+    if (app.status === parse.data.status) {
+      if (parse.data.adminNotes && parse.data.adminNotes !== app.adminNotes) {
+        app.adminNotes = parse.data.adminNotes;
+        app.lastUpdatedBy = req.user._id;
+        await app.save();
+      }
+      return success(res, { application: app }, 'Application status updated');
+    }
+
+    const isAdmin = ['placement_admin', 'sys_admin'].includes(req.user.role);
+    if (!isAdmin && !app.canTransitionTo(parse.data.status)) {
       return next(createError(
         `Cannot transition application from '${app.status}' to '${parse.data.status}'`,
         400
@@ -227,6 +295,31 @@ async function updateApplicationStatus(req, res, next) {
       req,
     });
 
+    const isComp = app.opportunity && (app.opportunity.opportunityType === 'hackathon' || app.opportunity.opportunityType === 'coding_competition');
+
+    let statusLabel = app.status.replace('_', ' ');
+    if (isComp) {
+      if (app.status === 'shortlisted') statusLabel = 'Advanced to next stage';
+      else if (app.status === 'selected') statusLabel = 'Winner / Finalist';
+      else if (app.status === 'rejected') statusLabel = 'Eliminated';
+      else if (app.status === 'submitted') statusLabel = 'Registered';
+    } else {
+      if (app.status === 'shortlisted') statusLabel = 'shortlisted for next round';
+    }
+
+    pushNotification({
+      recipientId: app.student,
+      collegeId: req.user.college,
+      type: 'application_status',
+      title: isComp ? `Stage Update: ${app.opportunity.title}` : `Status: ${app.opportunity.companyName}`,
+      message: isComp
+        ? `Your status in ${app.opportunity.title} is now: ${statusLabel}.`
+        : `Your application status for ${app.opportunity.companyName} has been updated to: ${statusLabel}.`,
+      link: '/applications',
+      resourceType: 'Application',
+      resourceId: app._id,
+    });
+
     return success(res, { application: app }, 'Application status updated');
   } catch (err) {
     next(err);
@@ -246,7 +339,7 @@ async function updateRoundResult(req, res, next) {
     }
 
     const app = await Application.findById(req.params.id)
-      .populate('opportunity', 'college');
+      .populate('opportunity', 'college companyName title opportunityType type');
 
     if (!app) return next(createError('Application not found', 404));
     if (app.opportunity.college.toString() !== req.user.college?.toString()) {
@@ -288,6 +381,31 @@ async function updateRoundResult(req, res, next) {
       resourceId: app._id,
       description: `Round result updated: ${round.name} → ${parse.data.outcome}`,
       req,
+    });
+
+    const isComp = app.opportunity && (app.opportunity.opportunityType === 'hackathon' || app.opportunity.opportunityType === 'coding_competition');
+    const compLabel = isComp ? 'Phase' : 'Round';
+
+    let outcomeText = parse.data.outcome;
+    if (isComp) {
+      if (parse.data.outcome === 'advanced') outcomeText = 'qualified for the next phase';
+      else if (parse.data.outcome === 'selected') outcomeText = 'declared a winner/top performer';
+      else if (parse.data.outcome === 'rejected') outcomeText = 'eliminated';
+    } else {
+      if (parse.data.outcome === 'advanced') outcomeText = 'shortlisted for next round';
+      else if (parse.data.outcome === 'selected') outcomeText = 'selected';
+      else if (parse.data.outcome === 'rejected') outcomeText = 'not moving forward';
+    }
+
+    pushNotification({
+      recipientId: app.student,
+      collegeId: req.user.college,
+      type: 'application_status',
+      title: isComp ? `${compLabel} Update: ${app.opportunity.title}` : `Round Update: ${app.opportunity?.companyName || 'Recruitment'}`,
+      message: `Result for ${round.name}: you have been ${outcomeText}.`,
+      link: '/applications',
+      resourceType: 'Application',
+      resourceId: app._id,
     });
 
     return success(res, { application: app }, 'Round result updated');

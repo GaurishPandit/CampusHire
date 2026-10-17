@@ -30,5 +30,6 @@ router.post('/:id/rounds', authenticate, requireRole('placement_admin', 'sys_adm
 
 // Results for this opportunity
 router.post('/:id/results', authenticate, requireRole('placement_admin', 'sys_admin'), resultController.createResult);
+router.post('/:id/publish-results', authenticate, requireRole('placement_admin', 'sys_admin'), resultController.publishOpportunityResults);
 
 module.exports = router;

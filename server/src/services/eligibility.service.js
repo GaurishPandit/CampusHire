@@ -25,9 +25,31 @@ function evaluateEligibility(studentProfile, opportunity) {
   const reasons = [];
   let status = ELIGIBLE;
 
+  const isCompetition =
+    opportunity.opportunityType === 'hackathon' ||
+    opportunity.opportunityType === 'coding_competition' ||
+    opportunity.type === 'hackathon' ||
+    opportunity.type === 'coding_competition';
+
+  // ── Hackathons & Coding Competitions ──────────────────────────────────────
+  // Competitions are open events. If no specific barriers are set, student is immediately eligible!
+  const minCgpa = criteria.minCgpa ?? 0;
+  const maxBacklogs = criteria.maxActiveBacklogs ?? 999;
+  const eligibleBranches = criteria.eligibleBranches || [];
+  const eligibleYears = criteria.eligibleGraduationYears || [];
+
+  if (isCompetition && minCgpa === 0 && eligibleBranches.length === 0 && eligibleYears.length === 0) {
+    return {
+      status: ELIGIBLE,
+      reasons: ['Open participation event! All registered students are eligible to participate.'],
+      criteriaVersion: opportunity.updatedAt,
+    };
+  }
+
   // ── Missing academic data check ───────────────────────────────────────────
-  if (!studentProfile.academicDataVerified) {
-    reasons.push('Your academic data has not been verified yet. Please contact the placement cell.');
+  // Registered students with active accounts are considered valid unless core info is absent
+  if (!studentProfile.rollNumber || !studentProfile.branch) {
+    reasons.push('Core academic details (roll number or branch) are missing from your profile.');
     return {
       status: NEEDS_VERIFICATION,
       reasons,
@@ -36,45 +58,67 @@ function evaluateEligibility(studentProfile, opportunity) {
   }
 
   // ── CGPA check ────────────────────────────────────────────────────────────
-  const minCgpa = criteria.minCgpa ?? 0;
   if (minCgpa > 0) {
-    if (studentProfile.cgpa === null || studentProfile.cgpa === undefined) {
+    const studentCgpa = studentProfile.cgpa !== null && studentProfile.cgpa !== undefined ? Number(studentProfile.cgpa) : null;
+    if (studentCgpa === null) {
       reasons.push('CGPA is not recorded. Cannot verify CGPA eligibility.');
       status = NEEDS_VERIFICATION;
-    } else if (studentProfile.cgpa < minCgpa) {
+    } else if (studentCgpa < minCgpa) {
       reasons.push(
-        `Your CGPA (${studentProfile.cgpa.toFixed(2)}) is below the minimum required CGPA of ${minCgpa.toFixed(2)}.`
+        `Your CGPA (${studentCgpa.toFixed(2)}) is below the required minimum of ${minCgpa.toFixed(2)}.`
       );
       status = NOT_ELIGIBLE;
     }
   }
 
   // ── Active backlogs check ─────────────────────────────────────────────────
-  const maxBacklogs = criteria.maxActiveBacklogs ?? 0;
-  if (studentProfile.activeBacklogs === null || studentProfile.activeBacklogs === undefined) {
-    reasons.push('Active backlog count is not recorded. Cannot verify backlog eligibility.');
-    if (status === ELIGIBLE) status = NEEDS_VERIFICATION;
-  } else if (studentProfile.activeBacklogs > maxBacklogs) {
-    reasons.push(
-      `You have ${studentProfile.activeBacklogs} active backlog(s), but this opportunity allows a maximum of ${maxBacklogs}.`
-    );
-    status = NOT_ELIGIBLE;
+  if (criteria.maxActiveBacklogs !== undefined && criteria.maxActiveBacklogs !== null) {
+    const studentBacklogs = Number(studentProfile.activeBacklogs || 0);
+    const allowed = Number(criteria.maxActiveBacklogs);
+    if (studentBacklogs > allowed) {
+      reasons.push(
+        `You have ${studentBacklogs} active backlog(s), but maximum ${allowed} allowed.`
+      );
+      status = NOT_ELIGIBLE;
+    }
   }
 
   // ── Branch check ──────────────────────────────────────────────────────────
-  const eligibleBranches = criteria.eligibleBranches;
   if (eligibleBranches && eligibleBranches.length > 0) {
-    if (!studentProfile.branch) {
-      reasons.push('Branch is not recorded. Cannot verify branch eligibility.');
-      if (status === ELIGIBLE) status = NEEDS_VERIFICATION;
-    } else {
-      const normalizedBranch = studentProfile.branch.trim().toLowerCase();
-      const isEligible = eligibleBranches.some(
-        (b) => b.trim().toLowerCase() === normalizedBranch
-      );
-      if (!isEligible) {
+    const hasWildcard = eligibleBranches.some((b) =>
+      ['all', 'any', 'open to all', 'all branches', '*'].includes(String(b).trim().toLowerCase())
+    );
+
+    if (!hasWildcard) {
+      const studentBranch = String(studentProfile.branch || '').trim().toLowerCase();
+      const acronymMap = {
+        cse: ['computer science', 'computer science and engineering', 'cs', 'comp sci'],
+        it: ['information technology', 'info tech'],
+        ece: ['electronics and communication', 'electronics and communication engineering', 'electronics'],
+        eee: ['electrical and electronics', 'electrical and electronics engineering'],
+        ee: ['electrical engineering'],
+        me: ['mechanical engineering', 'mech'],
+        ce: ['civil engineering', 'civil'],
+        aids: ['artificial intelligence and data science', 'ai & ds', 'ai/ds'],
+        aiml: ['artificial intelligence and machine learning', 'ai & ml', 'ai/ml'],
+      };
+
+      const isBranchEligible = eligibleBranches.some((b) => {
+        const norm = String(b).trim().toLowerCase();
+        if (norm === studentBranch) return true;
+        if (norm.includes(studentBranch) || studentBranch.includes(norm)) return true;
+
+        for (const [code, aliases] of Object.entries(acronymMap)) {
+          const matchStudent = studentBranch === code || aliases.some((a) => studentBranch.includes(a));
+          const matchTarget = norm === code || aliases.some((a) => norm.includes(a));
+          if (matchStudent && matchTarget) return true;
+        }
+        return false;
+      });
+
+      if (!isBranchEligible) {
         reasons.push(
-          `Your branch (${studentProfile.branch}) is not eligible for this opportunity. Eligible branches: ${eligibleBranches.join(', ')}.`
+          `Your branch (${studentProfile.branch}) is not listed in eligible branches: ${eligibleBranches.join(', ')}.`
         );
         status = NOT_ELIGIBLE;
       }
@@ -82,16 +126,20 @@ function evaluateEligibility(studentProfile, opportunity) {
   }
 
   // ── Graduation year check ─────────────────────────────────────────────────
-  const eligibleYears = criteria.eligibleGraduationYears;
   if (eligibleYears && eligibleYears.length > 0) {
-    if (!studentProfile.graduationYear) {
-      reasons.push('Graduation year is not recorded. Cannot verify graduation year eligibility.');
-      if (status === ELIGIBLE) status = NEEDS_VERIFICATION;
-    } else if (!eligibleYears.includes(studentProfile.graduationYear)) {
-      reasons.push(
-        `Your graduation year (${studentProfile.graduationYear}) is not eligible. Eligible years: ${eligibleYears.join(', ')}.`
-      );
-      status = NOT_ELIGIBLE;
+    const studentYear = Number(studentProfile.graduationYear);
+    const hasYearWildcard = eligibleYears.some((y) =>
+      ['all', 'any', 'open to all', '0', 0].includes(y)
+    );
+
+    if (!hasYearWildcard && studentYear) {
+      const isYearEligible = eligibleYears.some((y) => Number(y) === studentYear);
+      if (!isYearEligible) {
+        reasons.push(
+          `Your graduation year (${studentProfile.graduationYear}) is not eligible. Eligible batches: ${eligibleYears.join(', ')}.`
+        );
+        status = NOT_ELIGIBLE;
+      }
     }
   }
 
@@ -112,7 +160,7 @@ function evaluateEligibility(studentProfile, opportunity) {
     }
     if (missingFields.length > 0) {
       reasons.push(
-        `Your profile is missing required information: ${missingFields.join(', ')}. Please complete your profile before applying.`
+        `Profile is missing: ${missingFields.join(', ')}. Please update your profile before registering.`
       );
       if (status === ELIGIBLE) status = NEEDS_VERIFICATION;
     }
@@ -120,7 +168,11 @@ function evaluateEligibility(studentProfile, opportunity) {
 
   // ── All clear ─────────────────────────────────────────────────────────────
   if (status === ELIGIBLE) {
-    reasons.push('You meet all eligibility criteria for this opportunity.');
+    reasons.push(
+      isCompetition
+        ? 'You meet all registration criteria for this competition!'
+        : 'You meet all academic and department eligibility criteria for this opportunity.'
+    );
   }
 
   return {

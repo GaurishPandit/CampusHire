@@ -37,7 +37,7 @@ const UserSchema = new mongoose.Schema(
     lastName: { type: String, trim: true, maxlength: 100 },
 
     // Account status
-    isActive: { type: Boolean, default: false }, // false until account activated
+    isActive: { type: Boolean, default: true }, // active for all accounts
     isEmailVerified: { type: Boolean, default: false },
 
     // Invitation / account activation

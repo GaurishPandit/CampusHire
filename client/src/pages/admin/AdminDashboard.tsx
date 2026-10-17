@@ -271,24 +271,46 @@ export default function AdminDashboard() {
 
             {stats.upcomingDeadlines && stats.upcomingDeadlines.length > 0 ? (
               <div className="space-y-3">
-                {stats.upcomingDeadlines.map((d: any, idx: number) => (
-                  <div
-                    key={idx}
-                    className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs flex justify-between items-center"
-                  >
-                    <div>
-                      <p className="font-semibold text-white">{d.title}</p>
-                      <span className="text-slate-400 text-[11px]">{d.companyName}</span>
+                {stats.upcomingDeadlines.map((d: any, idx: number) => {
+                  const deadlineDate = d.deadline || d.applicationDeadline;
+                  const isValidDate = deadlineDate && !isNaN(new Date(deadlineDate).getTime());
+                  const formatted = isValidDate
+                    ? new Date(deadlineDate).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                      })
+                    : 'Open / Rolling';
+
+                  const isCompetition =
+                    d.opportunityType === 'hackathon' || d.opportunityType === 'coding_competition';
+
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-xs flex justify-between items-center"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-semibold text-white">{d.title}</p>
+                          {isCompetition && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                              {d.opportunityType === 'hackathon' ? 'Hackathon' : 'Competition'}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-slate-400 text-[11px]">{d.companyName}</span>
+                      </div>
+                      <span className="text-amber-400 font-medium ml-2 shrink-0">
+                        {formatted}
+                      </span>
                     </div>
-                    <span className="text-amber-400 font-medium">
-                      {new Date(d.deadline).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-xs text-slate-500 py-3 text-center">
-                No immediate deadlines in the next 7 days.
+                No active deadlines in the next 30 days.
               </p>
             )}
           </div>

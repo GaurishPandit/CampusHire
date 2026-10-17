@@ -6,10 +6,12 @@ import {
   Briefcase,
   Calendar,
   Save,
-  DollarSign,
+  IndianRupee,
   MapPin,
   ExternalLink,
   ShieldCheck,
+  Trophy,
+  Award,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { opportunityApi } from '@/api';
@@ -23,7 +25,7 @@ export default function OpportunityFormPage() {
     companyName: '',
     title: '',
     description: '',
-    type: 'placement',
+    type: 'full_time',
     workMode: 'on-site',
     location: '',
     ctcOrStipend: '',
@@ -33,7 +35,7 @@ export default function OpportunityFormPage() {
     minCgpa: 0,
     maxBacklogs: 0,
     eligibleBranches: 'CSE, ECE, IT, MECH',
-    eligibleGraduationYears: '2025, 2026',
+    eligibleGraduationYears: '',
     status: 'draft',
   });
 
@@ -56,7 +58,7 @@ export default function OpportunityFormPage() {
           companyName: opp.companyName || '',
           title: opp.title || '',
           description: opp.description || '',
-          type: opp.type || 'placement',
+          type: opp.type || opp.opportunityType || 'full_time',
           workMode: opp.workMode || 'on-site',
           location: opp.location || '',
           ctcOrStipend: opp.ctcOrStipend || '',
@@ -69,8 +71,8 @@ export default function OpportunityFormPage() {
             ? opp.eligibleBranches.join(', ')
             : opp.eligibleBranches || '',
           eligibleGraduationYears: Array.isArray(opp.eligibleGraduationYears)
-            ? opp.eligibleGraduationYears.join(', ')
-            : opp.eligibleGraduationYears || '',
+            ? opp.eligibleGraduationYears.filter((y: any) => Boolean(y) && Number(y) > 0).join(', ')
+            : (opp.eligibleGraduationYears && opp.eligibleGraduationYears !== '0' ? String(opp.eligibleGraduationYears) : ''),
           status: opp.status || 'draft',
         });
       }
@@ -96,23 +98,36 @@ export default function OpportunityFormPage() {
         .filter(Boolean);
       const years = formData.eligibleGraduationYears
         .split(',')
-        .map((y) => Number(y.trim()))
-        .filter((y) => !isNaN(y));
+        .map((y) => y.trim())
+        .filter(Boolean)
+        .map((y) => Number(y))
+        .filter((y) => !isNaN(y) && y > 0);
+
+      let deadlineIso: string | undefined = undefined;
+      if (formData.deadline) {
+        const rawDate = formData.deadline.trim();
+        if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+          deadlineIso = new Date(`${rawDate}T23:59:59.999Z`).toISOString();
+        } else {
+          const d = new Date(rawDate);
+          deadlineIso = !isNaN(d.getTime()) ? d.toISOString() : undefined;
+        }
+      }
 
       const payload: any = {
         companyName: formData.companyName.trim(),
         title: formData.title.trim(),
         description: formData.description.trim() || `${formData.title} role at ${formData.companyName}`,
-        opportunityType: formData.type === 'placement' ? 'full_time' : formData.type,
-        type: formData.type === 'placement' ? 'full_time' : formData.type,
+        opportunityType: formData.type,
+        type: formData.type,
         workMode: formData.workMode === 'on-site' ? 'on_site' : formData.workMode,
         location: formData.location.trim(),
         ctcOrStipend: formData.ctcOrStipend.trim(),
         applicationMode: formData.applicationMode,
         externalApplicationUrl: formData.externalUrl.trim(),
         externalUrl: formData.externalUrl.trim(),
-        applicationDeadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
-        deadline: formData.deadline ? new Date(formData.deadline).toISOString() : undefined,
+        applicationDeadline: deadlineIso,
+        deadline: deadlineIso,
         status: formData.status || 'draft',
         minCgpa: Number(formData.minCgpa) || 0,
         maxBacklogs: Number(formData.maxBacklogs) || 0,
@@ -152,6 +167,8 @@ export default function OpportunityFormPage() {
     return <div className="p-8 text-center text-slate-400">Loading opportunity details...</div>;
   }
 
+  const isCompetition = formData.type === 'hackathon' || formData.type === 'coding_competition';
+
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fadeIn">
       {/* Top back navigation */}
@@ -168,32 +185,71 @@ export default function OpportunityFormPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black text-white tracking-tight">
-            {isEditing ? 'Edit Opportunity' : 'Create New Opportunity'}
+            {isEditing
+              ? isCompetition
+                ? formData.type === 'hackathon'
+                  ? 'Edit Hackathon'
+                  : 'Edit Coding Competition'
+                : 'Edit Opportunity'
+              : isCompetition
+              ? formData.type === 'hackathon'
+                ? 'Create Hackathon'
+                : 'Create Coding Competition'
+              : 'Create New Opportunity'}
           </h1>
           <p className="text-slate-400 text-sm mt-0.5">
-            Configure company information, role details, and server-enforced eligibility boundaries.
+            {isCompetition
+              ? 'Configure event themes, prize pool, registration modes, and guidelines.'
+              : 'Configure company information, role details, and server-enforced eligibility boundaries.'}
           </p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="p-8 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl space-y-8">
-        {/* Basic Role & Company Details */}
+        {/* Opportunity Type Selector (Top) */}
         <div className="space-y-4">
-          <h2 className="text-base font-bold text-white border-b border-slate-800 pb-2">
-            Company & Role Details
-          </h2>
+          <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+            {isCompetition ? (
+              <Trophy className="w-4 h-4 text-violet-400" />
+            ) : (
+              <Briefcase className="w-4 h-4 text-indigo-400" />
+            )}
+            <h2 className="text-base font-bold text-white">
+              {isCompetition ? 'Event & Organizer Details' : 'Company & Role Details'}
+            </h2>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Company Name *
+                Opportunity Type
+              </label>
+              <select
+                value={formData.type}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500 font-semibold"
+              >
+                <option value="full_time">💼 Full-time Placement</option>
+                <option value="internship">🎓 Internship</option>
+                <option value="hackathon">⚡ Hackathon</option>
+                <option value="coding_competition">🏆 Coding Competition</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                {isCompetition ? 'Host / Organizing Entity / Sponsor *' : 'Company Name *'}
               </label>
               <div className="relative">
                 <Building className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Google, Microsoft, Adobe"
+                  placeholder={
+                    isCompetition
+                      ? 'e.g. Google Cloud, Major League Hacking, ACM Chapter'
+                      : 'e.g. Google, Microsoft, Adobe'
+                  }
                   value={formData.companyName}
                   onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
                   className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -203,14 +259,28 @@ export default function OpportunityFormPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Opportunity Title *
+                {isCompetition
+                  ? formData.type === 'hackathon'
+                    ? 'Hackathon Name / Theme *'
+                    : 'Competition Title *'
+                  : 'Opportunity Title *'}
               </label>
               <div className="relative">
-                <Briefcase className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                {isCompetition ? (
+                  <Trophy className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                ) : (
+                  <Briefcase className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                )}
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Software Development Engineer - I"
+                  placeholder={
+                    isCompetition
+                      ? formData.type === 'hackathon'
+                        ? 'e.g. National Smart AI Hackathon 2026'
+                        : 'e.g. CodeCraft Annual Algorithmic Cup'
+                      : 'e.g. Software Development Engineer - I'
+                  }
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -220,42 +290,36 @@ export default function OpportunityFormPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Opportunity Type
-              </label>
-              <select
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
-              >
-                <option value="placement">Full-time Placement</option>
-                <option value="internship">Internship</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Work Mode
+                {isCompetition ? 'Event Format' : 'Work Mode'}
               </label>
               <select
                 value={formData.workMode}
                 onChange={(e) => setFormData({ ...formData, workMode: e.target.value })}
                 className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
               >
-                <option value="on-site">On-site</option>
-                <option value="remote">Remote</option>
+                <option value="on-site">
+                  {isCompetition ? 'In-Person / On-Campus' : 'On-site'}
+                </option>
+                <option value="remote">
+                  {isCompetition ? 'Online / Virtual' : 'Remote'}
+                </option>
                 <option value="hybrid">Hybrid</option>
               </select>
             </div>
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Location
+                {isCompetition ? 'Venue / Platform' : 'Location'}
               </label>
               <div className="relative">
                 <MapPin className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
                   type="text"
-                  placeholder="e.g. Bengaluru / Hyderabad / Pan-India"
+                  placeholder={
+                    isCompetition
+                      ? 'e.g. Campus Auditorium / HackerEarth / Unstop'
+                      : 'e.g. Bengaluru / Hyderabad / Pan-India'
+                  }
                   value={formData.location}
                   onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                   className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -265,13 +329,21 @@ export default function OpportunityFormPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                CTC / Stipend Package
+                {isCompetition ? 'Prize Pool & Rewards (Cash, Swag, PPO)' : 'CTC / Stipend Package'}
               </label>
               <div className="relative">
-                <DollarSign className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                {isCompetition ? (
+                  <Trophy className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-amber-500" />
+                ) : (
+                  <IndianRupee className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                )}
                 <input
                   type="text"
-                  placeholder="e.g. 18 LPA or 45,000 / month"
+                  placeholder={
+                    isCompetition
+                      ? 'e.g. ₹1,50,000 Cash Pool + Certificates + PPI'
+                      : 'e.g. ₹18 LPA or ₹45,000 / month'
+                  }
                   value={formData.ctcOrStipend}
                   onChange={(e) => setFormData({ ...formData, ctcOrStipend: e.target.value })}
                   className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -281,11 +353,15 @@ export default function OpportunityFormPage() {
 
             <div className="sm:col-span-2">
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Role Description & Requirements
+                {isCompetition ? 'Problem Statement, Themes & Rules' : 'Role Description & Requirements'}
               </label>
               <textarea
                 rows={4}
-                placeholder="Outline responsibilities, qualifications, and recruitment overview..."
+                placeholder={
+                  isCompetition
+                    ? 'Outline the problem themes, evaluation criteria, team size limits, and submission rules...'
+                    : 'Outline responsibilities, qualifications, and recruitment overview...'
+                }
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -294,37 +370,45 @@ export default function OpportunityFormPage() {
           </div>
         </div>
 
-        {/* Application Mode & Deadlines */}
+        {/* Application / Registration Mode & Deadlines */}
         <div className="space-y-4">
           <h2 className="text-base font-bold text-white border-b border-slate-800 pb-2">
-            Application Mode & Deadline
+            {isCompetition ? 'Registration Mode & Deadline' : 'Application Mode & Deadline'}
           </h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Application Mode
+                {isCompetition ? 'Registration Mode' : 'Application Mode'}
               </label>
               <select
                 value={formData.applicationMode}
                 onChange={(e) => setFormData({ ...formData, applicationMode: e.target.value })}
                 className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
               >
-                <option value="internal">Campus Internal Application</option>
-                <option value="external">External Company Link</option>
+                <option value="internal">
+                  {isCompetition ? 'Direct Campus Registration' : 'Campus Internal Application'}
+                </option>
+                <option value="external">
+                  {isCompetition ? 'External Link (Unstop / Devpost / Form)' : 'External Link (Google Form or Company Portal)'}
+                </option>
               </select>
             </div>
 
             {formData.applicationMode === 'external' && (
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  External Application URL *
+                  {isCompetition ? 'Official Registration Portal Link *' : 'Google Form or Company Portal Link *'}
                 </label>
                 <div className="relative">
                   <ExternalLink className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                   <input
                     type="url"
-                    placeholder="https://company.careers/job/123"
+                    placeholder={
+                      isCompetition
+                        ? 'e.g. https://unstop.com/... or https://devpost.com/...'
+                        : 'e.g. https://forms.gle/... or https://company.careers/job/123'
+                    }
                     value={formData.externalUrl}
                     onChange={(e) => setFormData({ ...formData, externalUrl: e.target.value })}
                     className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-white focus:outline-none focus:border-indigo-500"
@@ -335,7 +419,7 @@ export default function OpportunityFormPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Application Deadline *
+                {isCompetition ? 'Registration Deadline *' : 'Application Deadline *'}
               </label>
               <div className="relative">
                 <Calendar className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -367,14 +451,21 @@ export default function OpportunityFormPage() {
           </div>
         </div>
 
-        {/* Deterministic Eligibility Engine Parameters */}
+        {/* Eligibility Section */}
         <div className="space-y-4">
           <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
             <h2 className="text-base font-bold text-white">
-              Eligibility Engine Configuration
+              {isCompetition
+                ? 'Participant Eligibility (Optional — Open by Default)'
+                : 'Eligibility Engine Configuration'}
             </h2>
           </div>
+          {isCompetition && (
+            <p className="text-xs text-slate-400">
+              Hackathons and coding competitions are open to all students by default. Leave minimum CGPA at 0 and branches empty if participation is unrestricted.
+            </p>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
@@ -394,7 +485,7 @@ export default function OpportunityFormPage() {
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Maximum Permitted Active Backlogs
+                {isCompetition ? 'Maximum Allowed Backlogs (leave 0 or empty for any)' : 'Maximum Permitted Active Backlogs'}
               </label>
               <input
                 type="number"
@@ -444,10 +535,18 @@ export default function OpportunityFormPage() {
           <button
             type="submit"
             disabled={saving}
-            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition-all hover:scale-105"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold shadow-lg shadow-indigo-600/25 transition-all hover:scale-105 cursor-pointer"
           >
             <Save className="w-4 h-4" />
-            {saving ? 'Saving...' : isEditing ? 'Update Opportunity' : 'Create Opportunity'}
+            {saving
+              ? 'Saving...'
+              : isEditing
+              ? isCompetition
+                ? 'Update Competition'
+                : 'Update Opportunity'
+              : isCompetition
+              ? 'Create Competition'
+              : 'Create Opportunity'}
           </button>
         </div>
       </form>
