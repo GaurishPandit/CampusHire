@@ -4,6 +4,19 @@ A production-minded, full-stack campus recruitment and placement management plat
 
 ---
 
+## 🌐 Live Deployment
+
+| Service | URL |
+|---|---|
+| **Frontend** (Vercel) | [https://campus-hire-zeta.vercel.app](https://campus-hire-zeta.vercel.app) |
+| **Backend API** (Render) | [https://campushire-ssix.onrender.com/api/v1](https://campushire-ssix.onrender.com/api/v1) |
+| **Health Check** | [https://campushire-ssix.onrender.com/api/v1/health](https://campushire-ssix.onrender.com/api/v1/health) |
+| **Database** | MongoDB Atlas (cloud-hosted) |
+
+> **Note:** The Render backend may take 30–60 seconds to respond on the first request if it has been idle (free-tier cold start). Subsequent requests are fast.
+
+---
+
 ## 🌟 Key Capabilities & Features
 
 ### 1. Role-Based Access Control (RBAC)
@@ -115,7 +128,9 @@ Test coverage includes:
 
 ---
 
-## 🔑 Demo Credentials (Synthetic Test Data)
+## 🔑 Demo Credentials
+
+> Try them instantly on the **[live app](https://campus-hire-zeta.vercel.app)** — click any demo account button on the login page for 1-click fill.
 
 | Role | Email | Password | Scope |
 |---|---|---|---|
@@ -123,8 +138,6 @@ Test coverage includes:
 | **Student (Eligible)** | `alice@demo.edu.in` | `Student@12345` | CSE 2025, CGPA 8.5, 0 backlogs |
 | **Student (Filtered)** | `dave@demo.edu.in` | `Student@12345` | Mech 2025, CGPA 6.8, 2 backlogs |
 | **Sys Admin** | `sysadmin@campushire.dev` | `Admin@12345` | College configuration & audit oversight |
-
-*(Note: The login page also features quick-fill buttons for instant 1-click authentication during development).*
 
 ---
 
